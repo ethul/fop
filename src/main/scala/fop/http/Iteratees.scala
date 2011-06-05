@@ -6,36 +6,64 @@ import scalaz._, scalaz.effects._, Scalaz._, IterV._
 object Iteratees {
   import Utils._
 
-  val getStatusLine = getBytesUntilSeq(Array('\n'.toByte))
+  def getStatusLine: IterV[Chunk,String] = getBytesUntilSep("\n")
 
-  val getHeaders = getBytesUntilSeq(Array('\n'.toByte,'\n'.toByte))
+  def getHeaders: IterV[Chunk,String] = getBytesUntilSep("\n\n")
 
-  val getPayload: IterV[Array[Byte],String] = {
-    def step(acc: StringBuilder)(s: Input[Array[Byte]]): IterV[Array[Byte],String] = {
+  def getPayload: IterV[Chunk,String] = {
+    def step(acc: StringBuilder)(s: Input[Chunk]): IterV[Chunk,String] = {
       s(el = e => Cont(step(acc appendAll e.map(_.toChar)))
       , empty = Cont(step(acc))
-      , eof = Done(acc toString, EOF[Array[Byte]])
+      , eof = Done(acc toString, EOF[Chunk])
       )
     }
     Cont(step(new StringBuilder))
   }
 
-  val httpResponse = for {
-    a <- getStatusLine
-    b <- getHeaders
-    c <- getPayload
-  } yield (a,b,c)
+  def popEol: IterV[Chunk,Unit] = {
+    def step(s: Input[Chunk]): IterV[Chunk,Unit] = {
+      s(el = e => {
+          if (e.indexOf('\n'.toByte) == 0) Done((), El(e tail))
+          else Done((), s)
+        }
+      , empty = Cont(step)
+      , eof = Done((), EOF[Chunk])
+      )
+    }
+    Cont(step)
+  }
+
+  def httpResponse: IterV[Chunk,(String,String,String)] = {
+    for {
+      a <- getStatusLine
+      _ <- popEol
+      b <- getHeaders
+      _ <- popEol
+      _ <- popEol
+      c <- getPayload
+    } yield (a,b,c)
+  }
 
   private object Utils {
-    val getBytesUntilSeq: Seq[Byte] => IterV[Array[Byte],String] = seq => {
-      def step(acc: StringBuilder)(s: Input[Array[Byte]]): IterV[Array[Byte],String] = {
+    def getBytesUntilSep: String => IterV[Chunk,String] = sep => {
+      def step(acc: StringBuilder)(s: Input[Chunk]): IterV[Chunk,String] = {
         s(el = e => {
-            val i = e.indexOfSlice(seq)
-            if (i == -1) Cont(step(acc appendAll e.map(_.toChar)))
-            else Done({ acc appendAll e.take(i).map(_.toChar) ; acc toString }, El(e drop i))
+            // we have to handle the case when part of the sep is already in the acc
+            // and the other part is in the chunk. so we add the chunk right away and
+            // then if the sep is in fact inside, we pull it out along with the chunk
+            // part following the sep and pass it along as unprocessed
+            val acc1 = acc.appendAll(e.map(_.toChar))
+            val i = acc1.indexOf(sep)
+            if (i != -1) {
+              val res = acc1.toString
+              val left = res.slice(0, i)
+              val right = res.slice(i, res.length)
+              Done(left, El(right.toArray.map(_.toByte)))
+            }
+            else Cont(step(acc1))
           }
         , empty = Cont(step(acc))
-        , eof = Done(acc toString, EOF[Array[Byte]])
+        , eof = Done(acc toString, EOF[Chunk])
         )
       }
       Cont(step(new StringBuilder))
