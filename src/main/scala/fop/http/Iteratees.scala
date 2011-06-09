@@ -6,14 +6,19 @@ import scalaz._, scalaz.effects._, Scalaz._, IterV._
 object Iteratees {
   import Utils._
 
-  def httpResponse: IterV[Chunk,(String,String,String)] = {
-    for {
-      // TODO: ethul, skip leading newlines
-      a <- line 
-      b <- linesUntilEmptyLine
-      _ <- newline
-      c <- lines
-    } yield (a,b,c)
+  object Http {
+    /**
+     * response = *CRLF Status-Line *(message-header CRLF) CRLF [ message-body ]
+     */
+    def response: IterV[Chunk,(String,String,String)] = {
+      for {
+        _ <- skip("\n")
+        a <- line 
+        b <- linesUntilEmptyLine
+        _ <- newline
+        c <- lines
+      } yield (a,b,c)
+    }
   }
 
   private object Utils {
@@ -86,6 +91,28 @@ object Iteratees {
         )
       }
       Cont(step)
+    }
+
+    def skip: String => IterV[Chunk,Unit] = {
+      sk => {
+        import scala.annotation.tailrec
+        @tailrec def loop(acc: StringBuilder): StringBuilder = {
+          if (acc.indexOf(sk) == 0) loop(acc.delete(0,sk length))
+          else acc
+        }
+        def step(acc: StringBuilder)(s: Input[Chunk]): IterV[Chunk,Unit] = {
+          s(el = e => {
+              acc.appendAll(e map (_ toChar))
+              if (acc.length < sk.length) Cont(step(acc))
+              else if (acc.indexOf(sk) == 0) Cont(step(loop(acc)))
+              else Done((), El(acc.toString.toArray.map(_ toByte)))
+            }
+          , empty = Cont(step(acc))
+          , eof = Done((), EOF[Chunk])
+          )
+        }
+        Cont(step(new StringBuilder))
+      }
     }
   }
 }

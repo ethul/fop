@@ -13,18 +13,14 @@ object IterateesSpecification extends Properties("Iteratees") {
    * headers, and body are organized in the input stream. this is not testing
    * the actual content within each segment
    */
-  property("http response stream") = forAll(
-    Gen.alphaStr suchThat (!_.isEmpty), Gen.listOf(Gen.alphaStr suchThat (!_.isEmpty)), Gen.alphaStr, Gen.choose(1,10)) { 
-    (statusLine,headers,body,chunkSize) => {
-      // generic-message = start-line
-      //                   *(message-header CRLF)
-      //                   CRLF
-      //                   [ message-body ]
-      // start-line      = Request-Line | Status-Line
+  property("http response") = forAll(
+    Gen.alphaStr suchThat (!_.isEmpty), Gen.listOf(Gen.alphaStr suchThat (!_.isEmpty)), Gen.alphaStr, Gen.choose(1,10), Gen.choose(0,5)) { 
+    (statusLine,headers,body,chunkSize,leading) => {
+      val newlines = (0 to leading).map(x => "\n").mkString
       val headerStr = if (headers.length == 0) "" else headers.mkString("\n")+"\n"
-      val input = new ByteArrayInputStream((statusLine+"\n"+headerStr+"\n"+body).toArray map (_.toByte))
+      val input = new ByteArrayInputStream((newlines+statusLine+"\n"+headerStr+"\n"+body).toArray map (_.toByte))
       val setup = io { input }.bracket((in: InputStream) => io { in.close }) { 
-        Enumerators.byteStream(_)(new Array[Byte](chunkSize))(Iteratees.httpResponse)
+        Enumerators.byteStream(_)(new Array[Byte](chunkSize))(Iteratees.Http.response)
       } 
       setup.unsafePerformIO match {
         case IterV.Done(x,_) => { 
